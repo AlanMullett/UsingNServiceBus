@@ -29,12 +29,14 @@
         private static void RunOnce()
         {
             var cts = new CancellationTokenSource();
-            
+
+            EventWaitHandle sequentialStarter = new AutoResetEvent(true);
+
             Task[] tasks =
             {
-                StartEndpoint(new FirstHandlerInSagaEndpoint(), cts.Token),
-                StartEndpoint(new SecondHandlerInSagaEndpoint(), cts.Token),
-                StartEndpoint(new DoingSomethingElseEndpoint(), cts.Token)
+                StartEndpoint(new FirstHandlerInSagaEndpoint(), cts.Token, sequentialStarter),
+                StartEndpoint(new SecondHandlerInSagaEndpoint(), cts.Token, sequentialStarter),
+                StartEndpoint(new DoingSomethingElseEndpoint(), cts.Token, sequentialStarter)
             };
 
             // let everything settle down
@@ -43,8 +45,8 @@
             // send a message that does something
             BusConfiguration config = new BusConfiguration();
             config.UseTransport<AzureServiceBusTransport>();
-            using (ISendOnlyBus bus = Bus.CreateSendOnly(config))
-            {
+            using (ISendOnlyBus bus = Bus.CreateSendOnly(config))            
+            {                
                 bus.Send<RunBusinessActivity>(m => m.ProcessId = Guid.NewGuid().ToString());
             }
 
@@ -53,7 +55,7 @@
             Task.WaitAll(tasks);
         }
 
-        static Task StartEndpoint(IConfigureThisEndpoint endpoint, CancellationToken token)
+        static Task StartEndpoint(IConfigureThisEndpoint endpoint, CancellationToken token, EventWaitHandle sequentialStarter)
         {
             return Task.Factory.StartNew(() =>
             {
@@ -64,9 +66,12 @@
                 config.UseTransport<AzureServiceBusTransport>();
                 config.UsePersistence<NHibernatePersistence>();
 
+                sequentialStarter.WaitOne();
+
                 var bus = Bus.Create(config);
                 using (bus.Start())
                 {
+                    sequentialStarter.Set();
                     token.WaitHandle.WaitOne();
                 }
             });
